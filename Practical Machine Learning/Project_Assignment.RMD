@@ -1,0 +1,174 @@
+---
+title: "Practical ML - Prediction Assignment Writeup"
+author: "Piotr Patrzałek"
+date: "7 lutego 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Pre processing
+My goal is to predict classe variable. I would like to start with some pre-processing things, because many of variables probably don't have high predictive power. I think that good idea is to drop them.
+
+## 1. Load dataset
+
+Firstly, I set directory and load training and testing data. Next i used `dplyr` package to drop some columns. I think that, that kind of variables aren't neccesary in my dataset.
+```{r PreProc1, echo=TRUE, message=FALSE, warning=FALSE}
+setwd("C:/Users/ppatrzalek/Desktop/Coursera/Practical Machine Learning/")
+training_original <- read.csv("pml-training.csv", sep = ",", header = TRUE) 
+testing_original <- read.csv("pml-testing.csv", sep = ",", header = TRUE)
+
+library(dplyr)
+training <- training_original %>%
+  select(-c("raw_timestamp_part_1", "raw_timestamp_part_2", "cvtd_timestamp", "num_window", "X", "user_name"))
+
+testing <- testing_original %>%
+  select(-c("raw_timestamp_part_1", "raw_timestamp_part_2", "cvtd_timestamp", "num_window", "X", "user_name"))
+```
+
+## 2. Near Zero Variance
+I used `nearZeroVar()` function to drop columns which probably can't help me to predict "classe" variable. 
+These variables have very low variance value so I think that it's a good idea to drop them at the moment. 
+```{r NearZeroVariables, echo=TRUE, message=FALSE, warning=FALSE}
+library(caret)
+training_nzv <- nearZeroVar(training, saveMetrics = TRUE)
+nzv <- which(training_nzv$nzv == TRUE)
+training <- training[,-nzv]; testing <- testing[,-nzv]
+
+```
+
+## 3. NA variables
+My next step was to get rid of variables with almost NA values. I think that predictors where are almost 95% of NA's values aren't valuable. 
+```{r NAvariables, echo=TRUE, message=FALSE, warning=FALSE}
+library(tidyr)
+na.variables <- function(data){
+  n_column <- ncol(data)
+  n_rows <- nrow(data)
+  na_columns <- c()
+  for(i in 1:n_column){
+  
+    if (length(which(is.na(data[,i]) == TRUE))/n_rows > 0.95) na_columns[i] <- i
+
+  }
+  which(is.na(na_columns) == FALSE)
+}
+
+na_variables <- na.variables(training)
+training <- training[,-na_variables]; testing <- testing[,-na_variables]
+```
+
+## 4. Correlation predictors
+After 1-3 steps of my analysis I have not 160 variables but only 60. Now I will try to calculate correlation between predictors and plot them. In my opinion if some predictors have high correlation then I can use only one of them. We will see how many predictors I can drop. I use only pearson correlation because it is most common metric and I would try to find some linear dependencies.
+
+```{r CorrelationPredictors, echo=TRUE, message=FALSE, warning=FALSE}
+correlation_variables <- training %>%
+  select(-classe)
+
+high_correlation_predictors <- function(data, value){
+  results_matrix <- as.matrix(cor(data, method = "pearson"))
+  results <- data.frame(row = rownames(results_matrix)[row(results_matrix)], 
+                        col = colnames(results_matrix)[col(results_matrix)], 
+                        corr = c(results_matrix))
+  results <- results %>%
+    filter(corr != 1)
+  
+  results %>%
+    filter(abs(corr) > value )
+}
+
+correlation_variables2 <- high_correlation_predictors(correlation_variables, 0.9)
+```
+
+Below I add correlation values between very associated variables.
+```{r echo=FALSE, message=FALSE, warning=FALSE, paged.print=TRUE}
+knitr::kable(
+  correlation_variables2,
+  caption = "Correlation between variables"
+)  
+```
+
+After correlation analysis i decided to drop columns which you see below:
+```{r CorrelationDrop, , echo=TRUE, warning= FALSE, message= FALSE}
+correlation_belt <- high_correlation_predictors(select(correlation_variables, contains("belt")), 0.9)
+drop_belt <- as.vector.factor(distinct(correlation_belt, col)[2:6,1])
+
+correlation_arm <- high_correlation_predictors(select(correlation_variables, contains("arm")), 0.9)
+drop_arm <- c("gyros_arm_y")
+  
+correlation_dumbbell <- high_correlation_predictors(select(correlation_variables, contains("dumbbell")), 0.9)
+drop_dumbbell <- c("gyros_dumbbell_z")
+
+training <- training %>%
+  select(-c(drop_belt, drop_arm, drop_dumbbell))
+
+testing <- testing %>%
+  select(-c(drop_belt, drop_arm, drop_dumbbell))
+```
+
+
+### Modelling
+I try two models: decision trees and random forest. For those models I trade on `caret` package. It's more easygoing for machine learnig problems. Before I create models I have to split training set into new training and testing dataset in proportions 70/30.
+```{r echo = TRUE, warning= FALSE,message= FALSE}
+inTrain <- createDataPartition(y = training$classe, p = 0.7, list = FALSE)
+
+training_model <- training[inTrain,]
+testing_model <- training[-inTrain,]
+```
+
+## 1. Decision trees
+Firstly, I prepare decision tree. For create fance plot I use `rattle` package.
+``` {r echo = TRUE, warning= FALSE, message= FALSE}
+set.seed(123)
+modelFitTree <- train(classe ~., method = "rpart", data = training_model)
+
+library(rattle)
+fancyRpartPlot(modelFitTree$finalModel)
+```
+
+Then I check accuracy on my new testing data set. 
+```{r echo = TRUE, warning= FALSE,message= FALSE}
+new_classe_testing_trees <- predict(modelFitTree, testing_model)
+conf_matrix_trees <- confusionMatrix(new_classe_testing_trees, testing_model$classe)
+print(conf_matrix_trees)
+```
+
+```{r echo = TRUE, warning= FALSE,message= FALSE}
+plot(conf_matrix_trees$table, col = conf_matrix_trees$byClass, 
+     main = paste("AccuracyDecisionTrees =",
+                  round(conf_matrix_trees$overall['Accuracy'], 2)))
+```
+
+
+## 2. Random Forest
+This model achive the highest accuracy. How you see below this model reach almost 100% accuracy on testing dataset. It could be strange that this model have such a good results. Of course in training dataset it could be overfitting but for testing dataset I think that this acurracy is OK.
+```{r echo = TRUE, warning= FALSE,message= FALSE}
+set.seed(123)
+library(randomForest)
+modelFitRandomForest <- train(classe ~., method = "rf", data = training_model, ntree = 10,
+                              trControl = trainControl(method = "repeatedcv", 
+                                                       number = 10,
+                                                       repeats = 10,
+                                                       classProbs = TRUE
+                                                       ))
+
+new_classe_testing_rf <- predict(modelFitRandomForest, testing_model)
+conf_matrix_rf <- confusionMatrix(new_classe_testing_rf, testing_model$classe)
+print(conf_matrix_rf)
+```
+
+
+```{r echo = TRUE, warning= FALSE,message= FALSE}
+plot(conf_matrix_rf$table, col = conf_matrix_rf$byClass, 
+     main = paste("AccuracyRandomForest =",
+                  round(conf_matrix_rf$overall['Accuracy'], 2)))
+```
+
+### Prediction
+I chosen the Random Forest model because it achive the highest value of accuracy. Results of my prediction on the original testing data set I present below:
+```{r echo = TRUE, warning= FALSE,message= FALSE}
+predict_classe <- predict(modelFitRandomForest, testing)
+print(predict_classe)
+```
+
