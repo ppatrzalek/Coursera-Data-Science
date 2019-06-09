@@ -1,0 +1,124 @@
+---
+title: "The storm analysis"
+author: "Piotr Patrzalek"
+date: "4 czerwca 2019"
+output: html_document
+---
+
+### 0. Loading nessesary libraries
+Dateset for this project you can find here: https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2
+
+In this data analysis I used only `data.table` and `ggplot2` libraries to manipulate and visualize storm dataset. 
+
+```{r echo = TRUE}
+library(data.table)
+library(ggplot2)
+```
+
+### 1. Loading and pre-processing data
+
+For load data I used `fread` function from `data.table` library because this is a faster solution that `read.csv` function from base package. 
+
+```{r loading, echo = TRUE}
+storm_data <- fread("repdata_data_StormData.csv")
+```
+
+My next step was short pre-processing. I would like to change the `BGN_DATE` variable format to date - I thought that this variable would be useful for me later.
+```{r preprocess, echo = TRUE}
+storm_data$BGN_DATE <- as.Date(storm_data$BGN_DATE, "%m/%d/%Y %H:%M:%S")
+```
+
+
+```{r year_storm, echo = TRUE}
+ggplot(data = storm_data, mapping = aes(x = BGN_DATE)) +
+  geom_histogram()
+
+```
+
+
+
+One of my most important things during pre-processing data was create two functions. First, I used to calculate damage cost dependent of the type of damage - "B", "M", "K" and "H".
+```{r dmgecost, echo = TRUE}
+DmgeCost <- function(x, y) {
+  if(x == "B" | x == "b"){
+    y * 1e9
+  } else if(x == "M" | x == "m"){
+    y * 1e6
+  } else if(x == "K" | x == "k"){
+    y * 1e3
+  } else if(x == "H" | x == "h"){
+    y * 1e2
+  } else {
+    y * 0 
+  }
+}
+```
+
+
+My next function is used for create nice visualization which I did two times in the next steps.
+```{r stormcolplot, echo = TRUE}
+storm_colplot <- function(dataset, var_x, var_y) {
+
+  ggplot(data = dataset) +
+  geom_col(mapping = aes(x = reorder(var_x, -var_y), y = var_y), fill = "brown") +
+  theme_bw(base_size = 10, base_line_size = 0.4) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), 
+        axis.title = element_text(face = "bold", size = 10),
+        plot.title = element_text(face = "bold", size = 12))
+} 
+```
+
+
+In the end of my pre-process stage was to create three new variables - `CostProp` (costs of property damage), `CostsCrop` (costs of crop damage) and `CostsAll` (sum of those damages).
+```{r newvariables, echo = TRUE}
+storm_data <-
+  storm_data[, `:=`(
+    CostsProp = DmgeCost(PROPDMGEXP, PROPDMG),
+    CostsCrop = DmgeCost(CROPDMGEXP, CROPDMG)
+  )][,
+     CostsAll := CostsProp + CostsCrop]
+```
+
+### 2. Which types of events are most harmful with respect to population health
+
+My first exercise consists of two steps: 
+  1. Calculate the sum of injuries depends of events type
+  2. Order a sum from previous step.
+```{r health, echo = TRUE}
+health_data <- storm_data[, .(SumInjuries = sum(INJURIES, na.rm = TRUE)/1e3), by = EVTYPE][order(-SumInjuries)]
+health_data <- head(health_data, n = 10)
+```
+
+In my opinion results are very predictable - the most harmful event is tornado. 
+```{r healthdata, echo = TRUE}
+print(health_data, n = 10)
+```
+
+Below I present a column plot to show most harmfull events across USA.
+```{r healthplot, echo = TRUE}
+storm_colplot(dataset = health_data, var_x = health_data$EVTYPE, var_y = health_data$SumInjuries) +
+  labs(x = "States", y = "Amount of injuries") + 
+  labs(title = "10 most harmful events across USA (in thousends)")
+```
+
+### 3. Which types of events have the greatest economic consequences
+
+Second exercise is to indicate the events which have the greates economic consequances. Here similar like in previous point I had to only sum a new variable `CostsAll` which I created during pre-processing and then order this sum. In order to simplify analysis I substract this sum by `1e9`.
+```{r costs, echo = TRUE}
+costs_data <- storm_data[, .(SumCosts = sum(CostsAll, na.rm = TRUE)/1e9), by = EVTYPE][order(-SumCosts)]
+costs_data <- head(costs_data, n = 10)
+```
+
+Below I show only ten the greates economic consequences. I think that rest of results aren't so important. 
+```{r costsdata, echo = TRUE}
+print(costs_data)
+```
+
+
+Below I add similar column plot like in previous point.
+```{r costsplot, echo = TRUE}
+storm_colplot(dataset = costs_data, var_x = costs_data$EVTYPE, var_y = costs_data$SumCosts) +
+  labs(x = "States", y = "Costs of events") + 
+  labs(title = "10 most expensive events across USA (in billions)")
+```
+
